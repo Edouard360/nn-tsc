@@ -11,25 +11,27 @@ from keras.callbacks import ReduceLROnPlateau
 from keras.layers import Concatenate, Conv1D, MaxPool1D, Activation, Dense
 from keras.layers.normalization import BatchNormalization
 from keras.models import Model
-from keras.utils import np_utils
+from keras.utils import plot_model
 
 from callbacks import SoftVerbose
 from layers import ConvDiff, AutoReshape
-from tools import train_test_ucr
+from tools import train_test_ucr, initialize_dataframe, get_ucr_list
 
-epochs = 1000
+# import tensorflow as tf
+# from keras.backend.tensorflow_backend import set_session
+# config = tf.ConfigProto()
+# config.gpu_options.per_process_gpu_memory_fraction = 0.3
+# config.gpu_options.allow_growth=True
+# set_session(tf.Session(config=config))
 
-# flist = ['Adiac', 'Beef', 'CBF', 'ChlorineConcentration', 'CinC_ECG_torso', 'Coffee', 'Cricket_X', 'Cricket_Y', 'Cricket_Z',
-# 'DiatomSizeReduction', 'ECGFiveDays', 'FaceAll', 'FaceFour', 'FacesUCR', '50words', 'FISH', 'Gun_Point', 'Haptics',
-# 'InlineSkate', 'ItalyPowerDemand', 'Lighting2', 'Lighting7', 'MALLAT', 'MedicalImages', 'MoteStrain', 'NonInvasiveFatalECG_Thorax1',
-# 'NonInvasiveFatalECG_Thorax2', 'OliveOil', 'OSULeaf', 'SonyAIBORobotSurface', 'SonyAIBORobotSurfaceII', 'StarLightCurves', 'SwedishLeaf', 'Symbols',
-# 'synthetic_control', 'Trace', 'TwoLeadECG', 'Two_Patterns', 'uWaveGestureLibrary_X', 'uWaveGestureLibrary_Y', 'uWaveGestureLibrary_Z', 'wafer', 'WordsSynonyms', 'yoga']
-
-fdir = "../Data/UCR_TS_Archive_2015/"
-flist = ['50words']
+fdir = "./ucr/"
+flist = get_ucr_list()
 
 soft_verbose = SoftVerbose()
 # tensorboard = TensorBoard(log_dir = './logs',write_graph=True,write_images=True)
+dataframe = initialize_dataframe("logs/results.csv")
+
+epochs = 10
 
 for each in flist:
     fname = each
@@ -61,13 +63,15 @@ for each in flist:
     out = Dense(nb_classes, activation='softmax')(full)
 
     model = Model(inputs=x, outputs=out)
-    json_string = model.to_json()
+
     optimizer = keras.optimizers.Adam()
 
     model.compile(loss='categorical_crossentropy',
                   optimizer=optimizer,
                   metrics=['accuracy'])
     # model.load_weights('./models/' + fname + '.h5')
+    # json_string = model.to_json()
+    # plot_model(model, to_file='./model.png')
 
     reduce_lr = ReduceLROnPlateau(monitor='loss', factor=0.5,
                                   patience=50, min_lr=0.0001)
@@ -76,5 +80,10 @@ for each in flist:
 
     # model.save_weights('./models/' + fname + '.h5')
     # Print the testing results which has the lowest training loss.
+
     log = pd.DataFrame(hist.history)
-    print(log.loc[log['loss'].idxmin]['loss'], log.loc[log['loss'].idxmin]['val_acc'])
+    best_val_acc = np.round(log.loc[log['val_acc'].idxmax]['val_acc'], 2)
+    final_val_acc = np.round(log.loc[log['loss'].idxmin]['val_acc'], 2)
+    dataframe.ix[fname, :] = best_val_acc, final_val_acc
+    print("For dataset %s\nBest test accuracy: %.2f\nFinal accuracy: %.2f\n" % (fname, best_val_acc, final_val_acc))
+    dataframe.to_csv(dataframe.path)
