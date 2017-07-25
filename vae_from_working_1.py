@@ -44,7 +44,7 @@ x_test = x_test.reshape(x_test.shape+(1,))
 x_concat = x_concat.reshape(x_concat.shape+(1,))
 print(x_concat.shape)
 
-x_concat = x_concat[:3000] # BE CAREFUL !! The size must be a correct multiple of the batch_size
+#x_concat = x_concat[:3000] # BE CAREFUL !! The size must be a correct multiple of the batch_size
 epochs = 100
 
 
@@ -55,14 +55,14 @@ kernel_size = 3
 intermediate_dim = 128
 latent_dim = 10
 epsilon_std = 1.0
-batch_size = 100 # Be extremely careful ! This
+batch_size = 100 # Be extremely careful ! This could create issues with shapes
 print("Batch size is : "+str(batch_size))
 output_shape = (batch_size, ((crop_length//2)//2), depth)
 # (channels last with tensorflow) / with theano, channels first (batch_size, depth, ((crop_length//2)//2))
 
 def sampling(args):
     z_mean, z_log_var = args
-    epsilon = K.random_normal(shape=(batch_size,latent_dim),
+    epsilon = K.random_normal(shape=(latent_dim,), # better than (batch_size, latent_dim) since batch_size can vary !
                               mean=0., stddev=epsilon_std)
     return z_mean + K.exp(z_log_var) * epsilon
 
