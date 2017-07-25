@@ -2,15 +2,15 @@
 with Keras and deconvolution layers.
 Reference: "Auto-Encoding Variational Bayes" https://arxiv.org/abs/1312.6114
 '''
-import numpy as np
 import matplotlib.pyplot as plt
-
-from keras.layers import Input, Dense, Lambda, Flatten, Reshape, MaxPooling1D, Conv1D, UpSampling1D
-from keras.models import Model
+import numpy as np
 from keras import backend as K
 from keras import metrics
-
+from keras.layers import Input, Dense, Lambda, Flatten, Reshape, MaxPooling1D, Conv1D, UpSampling1D
+from keras.models import Model
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
+
 from tools import readucr, to_categorical
 
 fdir = "./ucr/"
@@ -42,12 +42,11 @@ x_concat = x_concat[:,:crop_length]
 x_train = x_train.reshape(x_train.shape+(1,))
 x_test = x_test.reshape(x_test.shape+(1,))
 x_concat = x_concat.reshape(x_concat.shape+(1,))
-print(x_concat.shape)
+
+x_train_concat, x_test_concat = train_test_split(x_concat, train_size=0.8)
 
 #x_concat = x_concat[:3000] # BE CAREFUL !! The size must be a correct multiple of the batch_size
 epochs = 100
-
-
 
 x = Input(shape=x_train.shape[1:])
 depth = 32
@@ -102,7 +101,8 @@ vae = Model(x, y)
 vae.compile(optimizer='rmsprop', loss=vae_loss)
 #vae.summary()
 
-vae.fit(x_concat, x_concat, shuffle=True, epochs=epochs, batch_size=batch_size, validation_data=(x_concat, x_concat))
+vae.fit(x_train_concat, x_train_concat, shuffle=True, epochs=epochs, batch_size=batch_size,
+        validation_data=(x_test_concat, x_test_concat))
 
 # build a model to project inputs on the latent space
 encoder = Model(x, z_mean)
