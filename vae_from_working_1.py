@@ -92,6 +92,8 @@ y = UpSampling1D(2)(y)
 y = Conv1D(1, kernel_size, activation='sigmoid', padding='same')(y)
 
 def vae_loss(x, y):
+    x = K.flatten(x) # Flattening is essential apparently
+    y = K.flatten(y)
     xent_loss = crop_length * metrics.binary_crossentropy(x, y)
     kl_loss = - 0.5 * K.mean(1 + z_log_var - K.square(z_mean) - K.exp(z_log_var), axis=-1)
     return K.mean(xent_loss + kl_loss)
