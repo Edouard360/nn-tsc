@@ -1,89 +1,146 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-@author: edouard
-"""
-
-import keras
 import numpy as np
 import pandas as pd
-from keras.callbacks import ReduceLROnPlateau
-from keras.layers import Concatenate, Conv1D, MaxPool1D, Activation, Dense
-from keras.layers.normalization import BatchNormalization
+from keras.regularizers import l1, l2
+from keras.utils import np_utils
+import pickle
+from tools import initialize_dataframe
+from data import data
+
+from hyperopt import Trials, STATUS_OK, tpe
+from hyperas import optim
+from hyperas.distributions import choice, uniform, conditional
+from keras.layers import MaxPooling1D, Input, Dense, Dropout, Conv1D, Reshape, Flatten, UpSampling1D,BatchNormalization, Activation
 from keras.models import Model
-from keras.utils import plot_model
 
-from callbacks import SoftVerbose
-from layers import ConvDiff, AutoReshape
-from tools import train_test_ucr, initialize_dataframe, get_ucr_list
+def model(x_train, x_test, Y_train, Y_test):
+    crop_length = 160
 
-# import tensorflow as tf
-# from keras.backend.tensorflow_backend import set_session
-# config = tf.ConfigProto()
-# config.gpu_options.per_process_gpu_memory_fraction = 0.3
-# config.gpu_options.allow_growth=True
-# set_session(tf.Session(config=config))
+    x_train_ = x_train[:, :crop_length]
+    x_test_ = x_test[:, :crop_length]
 
-fdir = "./ucr/"
-flist = get_ucr_list()
+    x_concat = np.concatenate([x_train_, x_test_])
+    x_concat = (x_concat - x_concat.min()) / (x_concat.max() - x_concat.min()) * 2 - 1.
+    x_train_ = x_concat[:x_train_.shape[0]]
+    x_test_ = x_concat[x_train_.shape[0]:]
 
-soft_verbose = SoftVerbose()
-# tensorboard = TensorBoard(log_dir = './logs',write_graph=True,write_images=True)
-dataframe = initialize_dataframe("logs/results.csv")
+    x_train_ = x_train_.reshape(x_train_.shape + (1,))
+    x_test_ = x_test_.reshape(x_test_.shape + (1,))
+    x_concat = np.concatenate([x_train_, x_test_],axis = 0)
 
-epochs = 10
+    epochs = 3
+    batch_size = 128
 
-for each in flist:
-    fname = each
-    x_train, Y_train, x_test, Y_test, nb_classes = train_test_ucr(fdir, fname)
-    batch_size = max(min(int(x_train.shape[0] / 10), 16), 64)
-    x = keras.layers.Input(x_train.shape[1:])
-    #    drop_out = Dropout(0.2)(x)
+    depth = {{choice([16])}}
+    n_layers = {{choice(["1 layer", "2 layers"])}}
 
-    x_diff = ConvDiff()(x)
-    x_combined = Concatenate(axis=2)([x_diff, x])
-    conv1 = Conv1D(16, 8, padding='same')(x_combined)
-    conv1 = BatchNormalization()(conv1)
-    conv1 = Activation('relu')(conv1)
+    if (conditional(n_layers) == "2 layers"):
+        squeeze = {{choice([1,2])}}
 
-    #    drop_out = Dropout(0.2)(conv1)
-    conv2 = Conv1D(32, (5), padding='same')(conv1)
-    conv2 = BatchNormalization()(conv2)
-    conv2 = Activation('relu')(conv2)
+    layer_after_conv = {{choice(["batch_norm","max_pool"])}}
 
-    #    drop_out = Dropout(0.2)(conv2)
-    conv3 = Conv1D(16, (3), padding='same')(conv2)
-    conv3 = BatchNormalization()(conv3)
-    conv3 = Activation('relu')(conv3)
-    # full = keras.layers.GlobalMaxPooling2D()(conv3)
+    if(conditional(layer_after_conv)=="batch_norm"):
+        activation = "relu"  # "Batchnorm + relu","maxPooling"
+        pooling = 1
+    elif(conditional(layer_after_conv)=="max_pool"):
+        activation = {{choice(["relu","elu",None])}} # "Batchnorm + relu","maxPooling"
+        pooling = {{choice([2, 4])}}
 
-    full = keras.layers.pooling.MaxPool1D(pool_size=5, strides=5, padding="valid")(conv3)
-    full = AutoReshape()(full)
+    kernel_size = 8
+    intermediate_dim = {{choice([32])}}
 
-    out = Dense(nb_classes, activation='softmax')(full)
+    undersample_rate = pooling**(2 if (conditional(n_layers)=="2 layers") else 1)
+    output_shape = (batch_size,crop_length//undersample_rate, 1)  # //4 //4
 
-    model = Model(inputs=x, outputs=out)
+    # use_biais = True / False
+    # elu / selu / relu
+    # dilation_rate -> but stride = 1
 
-    optimizer = keras.optimizers.Adam()
+    x = Input(shape=x_train_.shape[1:])
+    h = x
+    h = Conv1D(depth, kernel_size, padding='same')(h)  # name="test" # NO ! We duplicate
+    if (conditional(layer_after_conv) == "max_pool"):
+        h = MaxPooling1D(pooling, padding='same')(h)
+    else:
+        h = BatchNormalization()(h)
+    h = Activation(activation)(h)
 
-    model.compile(loss='categorical_crossentropy',
-                  optimizer=optimizer,
-                  metrics=['accuracy'])
-    # model.load_weights('./models/' + fname + '.h5')
-    # json_string = model.to_json()
-    # plot_model(model, to_file='./model.png')
+    if(conditional(n_layers)=="2 layers"):
+        h = Conv1D(depth * squeeze,kernel_size // squeeze, padding='same', activation=activation)(h)
+        if (conditional(layer_after_conv) == "max_pool"):
+            h = MaxPooling1D(pooling, padding='same')(h)
+        else:
+            h = BatchNormalization()(h)
+        h = Activation(activation)(h)
 
-    reduce_lr = ReduceLROnPlateau(monitor='loss', factor=0.5,
-                                  patience=50, min_lr=0.0001)
-    hist = model.fit(x_train, Y_train, batch_size=batch_size, epochs=epochs,
-                     verbose=0, validation_data=(x_test, Y_test), callbacks=[reduce_lr, soft_verbose])  # ,tensorboard])
+    flat = Flatten()(h)
+    hidden = Dense(intermediate_dim, activation=activation)(flat)
 
-    # model.save_weights('./models/' + fname + '.h5')
-    # Print the testing results which has the lowest training loss.
+    x_recons = hidden
+    x_recons = Dense(output_shape[1])(x_recons)
+    x_recons = Reshape(output_shape[1:])(x_recons)
 
-    log = pd.DataFrame(hist.history)
-    best_val_acc = np.round(log.loc[log['val_acc'].idxmax]['val_acc'], 2)
-    final_val_acc = np.round(log.loc[log['loss'].idxmin]['val_acc'], 2)
-    dataframe.ix[fname, :] = best_val_acc, final_val_acc
-    print("For dataset %s\nBest test accuracy: %.2f\nFinal accuracy: %.2f\n" % (fname, best_val_acc, final_val_acc))
-    dataframe.to_csv(dataframe.path)
+    if(conditional(n_layers)=="2 layers"):
+        x_recons = Conv1D(depth * squeeze, kernel_size // squeeze, padding='same', activation=activation)(x_recons)
+        if (conditional(layer_after_conv) == "max_pool"):
+            x_recons = UpSampling1D(pooling)(x_recons)
+
+    x_recons = Conv1D(depth, kernel_size, padding='same',activation=activation)(x_recons)
+    if (conditional(layer_after_conv) == "max_pool"):
+        x_recons = UpSampling1D(pooling)(x_recons)
+    x_recons = Conv1D(1, kernel_size, padding='same')(x_recons)
+
+    y = Dropout(0.2)(hidden)
+    y = Dense(Y_train.shape[1], activation='softmax')(y)
+
+    mlt = Model(x, [x_recons, y])
+    mlt.compile('adam', ['mse', 'categorical_crossentropy'], metrics=['acc'])
+
+    hist = mlt.fit(x_concat, [x_concat, np.concatenate([Y_train, Y_test])],
+                   sample_weight=[np.ones(len(x_concat)),
+                                  np.concatenate([np.ones(len(Y_train)),
+                                                  np.zeros(len(Y_test))])],
+                   shuffle=True,
+                   epochs=epochs,
+                   batch_size=batch_size,
+                   verbose=0
+                   )
+    acc = (np.argmax(mlt.predict(x_test_)[1], axis=1) == np.argmax(Y_test, axis=-1)).mean()
+    print("ACC :", acc)
+    return {'loss': -acc, 'status': STATUS_OK} # we could add the history...
+
+
+trials = Trials()
+
+def run_trials():
+
+    trials_step = 3  # how many additional trials to do after loading saved trials. 1 = save after iteration
+    max_trials = 5
+    try:  # try to load an already saved trials object, and increase the max
+        trials = pickle.load(open("logs/opt/trials.p", "rb"))
+        max_trials = len(trials.trials) + trials_step
+        print("Found saved Trials!")
+    except:  # create a new trials object and start searching
+        trials = Trials()
+
+    best_run, best_model, space = optim.minimize(model=model,
+                                                 data=data,
+                                                 algo=tpe.suggest,
+                                                 max_evals=max_trials,
+                                                 trials=trials,
+                                                 eval_space=True,
+                                                 return_space=True)
+
+    # save the trials object
+    with open("logs/opt/trials.p", "wb") as test:
+        pickle.dump(trials, test)
+
+    with open("logs/opt/space.p", "wb") as test:
+        pickle.dump(space, test)
+
+
+# loop indefinitely and stop whenever you like
+while True:
+    run_trials()
+
+print("Best performing model chosen hyper-parameters:")
+print(best_run)
