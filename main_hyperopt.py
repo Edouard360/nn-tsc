@@ -3,10 +3,11 @@ import sys, traceback
 
 import numpy as np
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
+from keras.engine import Layer
 from keras.layers import MaxPooling1D, Input, Dense, Dropout, Conv1D, Reshape, Flatten, UpSampling1D, \
-    BatchNormalization, Activation
+    BatchNormalization, Activation, Lambda
 from keras.models import Model
-
+from keras.losses import mse,categorical_crossentropy
 from data import data
 from mail import sendMessageException
 
@@ -23,13 +24,55 @@ space = {
                              {'type':'batch_norm',
                               'activation': 'relu',
                               'pooling_size':None}]),
+    'middle_layer': hp.choice('middle_layer',
+                              [{'type':'gaussian',
+                               'epsilon':hp.choice('epsilon',[0.1,0.5,1]),
+                               'correct_factor': hp.choice('correct_factor',[True, False]),
+                               'gaussian_regul':hp.choice('gaussian_regul',[0.1,0.5,5,10])},
+                               {'type':'regular',
+                                'epsilon':None,
+                                'correct_factor':None,
+                                'gaussian_regul':None}
+                              ]),
     'depth': hp.choice('depth',[16,32,64]),
-    'kernel_size': hp.choice('kernel_size',[4,8,16]),
-    'dropout': hp.uniform('dropout',.0,.5),
+    'kernel_size': hp.choice('kernel_size',[2,4,8,16]),
     'intermediate_dim': hp.choice('intermediate_dim',[16,32,64]),
+    'dropout': hp.uniform('dropout',.0,.5),
     'recons_regul': hp.uniform('recons_regul',1.,10.),
     'optimizer': hp.choice('optimizer',['adadelta','adam','rmsprop']),
 }
+from keras import backend as K
+
+def sampling(intermediate_dim,epsilon_std):
+    def lambda_sampling(args):
+        z_mean, z_log_var = args
+        epsilon = K.random_normal(shape=(intermediate_dim,), # better than (batch_size, latent_dim) since batch_size can vary !
+                                  mean=0., stddev=epsilon_std)
+        return z_mean + K.exp(z_log_var) * epsilon
+    return lambda_sampling
+
+class CustomVariationalLayer(Layer):
+    def __init__(self, flatten_length,loss_factor = 0.5, epsilon_std = 0.1,correct_factor = False, **kwargs):
+        self.flatten_length = flatten_length
+        self.epsilon_std = epsilon_std
+        self.loss_factor = loss_factor
+        self.correct_factor = correct_factor
+        super(CustomVariationalLayer, self).__init__(**kwargs)
+
+    def gaussian_loss(self, hidden_mean, hidden_log_var):
+        correction_factor = self.epsilon_std if self.correct_factor else 1
+        return K.mean(- self.loss_factor * K.sum(1 + hidden_log_var - K.square(hidden_mean) - correction_factor * K.exp(hidden_log_var), axis=-1))
+
+    def call(self, hidden_mean_and_log_var):
+        hidden_mean = hidden_mean_and_log_var[0]
+        hidden_log_var = hidden_mean_and_log_var[1]
+        epsilon_std = self.epsilon_std
+        loss = self.gaussian_loss(hidden_mean, hidden_log_var)
+        self.add_loss(loss)
+        epsilon = K.random_normal(shape=(self.flatten_length,), # better than (batch_size, latent_dim) since batch_size can vary !
+                                  mean=0., stddev=epsilon_std)
+        return hidden_mean + K.exp(hidden_log_var) * epsilon
+
 
 def f_nn(params):
     crop_length = 160
@@ -51,8 +94,12 @@ def f_nn(params):
 
     depth = params['depth']
     n_layers = params['n_layers']['n']
+
     kernel_size = params['kernel_size']
-    intermediate_dim = 32
+
+
+    intermediate_dim = params['intermediate_dim']
+    middle_layer = params['middle_layer']['type']
 
     if (n_layers == 2):
         squeeze = params['n_layers']['squeeze']
@@ -84,9 +131,18 @@ def f_nn(params):
         h = AfterConvLayer()(h)
         h = Activation(activation)(h)
 
-
     flat = Flatten()(h)
-    hidden = Dense(intermediate_dim, activation=activation)(flat)
+    if(middle_layer == 'gaussian'):
+        flat = Dense(intermediate_dim, activation=activation)(flat)
+        hidden_mean = Dense(intermediate_dim, activation=activation)(flat)
+        hidden_log_var = Dense(intermediate_dim, activation=activation)(flat)
+        #hidden = Lambda(sampling(intermediate_dim,epsilon_std), output_shape=(intermediate_dim,))([hidden_mean, hidden_log_var])
+        hidden = CustomVariationalLayer(intermediate_dim,
+                                        epsilon_std=params['middle_layer']['epsilon'],
+                                        loss_factor=params['middle_layer']['gaussian_regul'],
+                                        correct_factor=params['middle_layer']['correct_factor'])([hidden_mean, hidden_log_var])
+    elif (middle_layer == 'regular'):
+        hidden = Dense(intermediate_dim, activation=activation)(flat)
 
     x_recons = hidden
     x_recons = Dense(output_shape[1])(x_recons)
@@ -103,7 +159,7 @@ def f_nn(params):
 
     x_recons = Conv1D(1, kernel_size, padding='same')(x_recons)
 
-    y = Dropout(0.2)(hidden)
+    y = Dropout(params['dropout'])(hidden)
     y = Dense(Y_train.shape[1], activation='softmax')(y)
 
     mlt = Model(x, [x_recons, y])
@@ -123,8 +179,6 @@ def f_nn(params):
     print('ACC :', acc)
     return {'loss': -acc, 'status': STATUS_OK} # we could add the history...
 
-
-trials = Trials()
 
 def run_trials():
 
@@ -151,10 +205,10 @@ def run_trials():
 
         with open('logs/opt/space.p', 'wb') as test:
             pickle.dump(space, test)
+    except KeyboardInterrupt:
+        raise "Process stopped"
     except:
         sendMessageException(traceback.format_exc())
-
-
 
 
 # loop indefinitely and stop whenever you like
