@@ -37,33 +37,19 @@ def trial_change_3(t):
         bool_int_32 = True
         t['vals']['epsilon'] =[0] # epsilon was at 0.1
 
-        t['idxs']['correct_factor'] = [only_idx]
+        t['idxs']['correct_factor'] = [only_idx[0]]
         t['vals']['correct_factor'] = [1]  # correct_factor was false
     else:
         t['idxs']['correct_factor'] = []
         t['vals']['correct_factor'] = []
-
+    bool_int_32 = False # At the beginning of the loop
     if(bool_int_32):
         t['vals']['intermediate_dim'] = [1] # intermediate was at 32
 
 
-bool_int_32 = False
 for t in trials.miscs:
-    # Change the idxs
-    only_idx = np.unique([i[0] for i in list(t['idxs'].values()) if i != []])
-    assert len(only_idx) == 1, "check index"
-    if((t['vals']['middle_layer']['type'])==[0]):
-        bool_int_32 = True
-        t['vals']['epsilon'] =[0] # epsilon was at 0.1
+    print("TEST")
 
-        t['idxs']['correct_factor'] = [only_idx]
-        t['vals']['correct_factor'] = [1]  # correct_factor was false
-    else:
-        t['idxs']['correct_factor'] = []
-        t['vals']['correct_factor'] = []
-
-    if(bool_int_32):
-        t['vals']['intermediate_dim'] = [1] # intermediate was at 32
 
 with open('./trials.p', 'wb') as f:
     pickle.dump(trials, f)
